@@ -1,0 +1,21 @@
+version: 2
+
+models:
+  - name: slv_yellow_taxi
+    description: Valid, standardized trips at one row per source file row.
+    columns:
+      - name: trip_key
+        tests: [not_null, unique]
+      - name: pickup_at
+        tests: [not_null]
+      - name: dropoff_at
+        tests: [not_null]
+      - name: pickup_location_id
+        tests: [not_null]
+      - name: dropoff_location_id
+        tests: [not_null]
+
+  - name: slv_taxi_zones
+    columns:
+      - name: location_id
+        tests: [not_null, unique]

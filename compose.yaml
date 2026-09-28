@@ -1,0 +1,86 @@
+name: nyc-taxi-elt
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_DB: kestra
+      POSTGRES_USER: kestra
+      POSTGRES_PASSWORD: kestra
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d kestra -U kestra"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    volumes:
+      - kestra-postgres:/var/lib/postgresql/data
+
+  kestra:
+    image: kestra/kestra:v2.0.3
+    user: "root"
+    command: server standalone --flow-path /app/flows
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      SECRET_SNOWFLAKE_ACCOUNT: ${SECRET_SNOWFLAKE_ACCOUNT:-}
+      SECRET_SNOWFLAKE_USER: ${SECRET_SNOWFLAKE_USER:-}
+      SECRET_SNOWFLAKE_PASSWORD: ${SECRET_SNOWFLAKE_PASSWORD:-}
+      SECRET_SNOWFLAKE_ROLE: ${SECRET_SNOWFLAKE_ROLE:-}
+      SECRET_SNOWFLAKE_WAREHOUSE: ${SECRET_SNOWFLAKE_WAREHOUSE:-}
+      SECRET_SNOWFLAKE_DATABASE: ${SECRET_SNOWFLAKE_DATABASE:-}
+      SECRET_TAXI_START_MONTH: ${SECRET_TAXI_START_MONTH:-}
+      SECRET_TAXI_END_MONTH: ${SECRET_TAXI_END_MONTH:-}
+      KESTRA_CONFIGURATION: |
+        datasources:
+          postgres:
+            url: jdbc:postgresql://postgres:5432/kestra
+            driverClassName: org.postgresql.Driver
+            username: kestra
+            password: kestra
+        kestra:
+          server:
+            basic-auth:
+              username: "${KESTRA_ADMIN_EMAIL:-admin@localhost.dev}"
+              password: "${KESTRA_ADMIN_PASSWORD:-KestraLab2026!}"
+          repository:
+            type: postgres
+          storage:
+            type: local
+            local:
+              base-path: /app/storage
+          queue:
+            type: postgres
+          tasks:
+            tmp-dir:
+              path: /tmp/kestra-wd/tmp
+          url: http://localhost:8080/
+          plugins:
+            configurations:
+              - type: io.kestra.plugin.scripts.runner.docker.Docker
+                values:
+                  volume-enabled: true
+    restart: unless-stopped
+    volumes:
+      - kestra-storage:/app/storage
+      - ./kestra/flows:/app/flows:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/kestra-wd:/tmp/kestra-wd
+      - taxi-data:/data
+
+  pipeline:
+    profiles: ["build"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nyc-taxi-elt:local
+    command: ["dbt", "--version"]
+
+volumes:
+  kestra-postgres:
+  kestra-storage:
+  taxi-data:
+    name: nyc-taxi-elt_taxi-data

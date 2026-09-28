@@ -1,0 +1,106 @@
+id: nyc_yellow_taxi_elt
+namespace: lab.semana07
+description: Orquesta la infraestructura, ingesta y transformación ELT de NYC Yellow Taxi en Snowflake.
+
+tasks:
+  - id: bootstrap_snowflake
+    type: io.kestra.plugin.scripts.python.Commands
+    containerImage: nyc-taxi-elt:local
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: NEVER
+    env:
+      SNOWFLAKE_ACCOUNT: "{{ secret('SNOWFLAKE_ACCOUNT') }}"
+      SNOWFLAKE_USER: "{{ secret('SNOWFLAKE_USER') }}"
+      SNOWFLAKE_PASSWORD: "{{ secret('SNOWFLAKE_PASSWORD') }}"
+      SNOWFLAKE_ROLE: "{{ secret('SNOWFLAKE_ROLE') }}"
+      SNOWFLAKE_WAREHOUSE: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+      SNOWFLAKE_DATABASE: "{{ secret('SNOWFLAKE_DATABASE') }}"
+    commands:
+      - python /app/infra/bootstrap.py
+    retry:
+      type: constant
+      interval: PT30S
+      maxAttempts: 3
+
+  - id: ingest_yellow_taxi
+    type: io.kestra.plugin.scripts.python.Commands
+    containerImage: nyc-taxi-elt:local
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: NEVER
+      volumes:
+        - nyc-taxi-elt_taxi-data:/data
+    env:
+      SNOWFLAKE_ACCOUNT: "{{ secret('SNOWFLAKE_ACCOUNT') }}"
+      SNOWFLAKE_USER: "{{ secret('SNOWFLAKE_USER') }}"
+      SNOWFLAKE_PASSWORD: "{{ secret('SNOWFLAKE_PASSWORD') }}"
+      SNOWFLAKE_ROLE: "{{ secret('SNOWFLAKE_ROLE') }}"
+      SNOWFLAKE_WAREHOUSE: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+      SNOWFLAKE_DATABASE: "{{ secret('SNOWFLAKE_DATABASE') }}"
+      TAXI_START_MONTH: "{{ secret('TAXI_START_MONTH') }}"
+      TAXI_END_MONTH: "{{ secret('TAXI_END_MONTH') }}"
+    commands:
+      - python /app/ingestion/load.py
+    retry:
+      type: constant
+      interval: PT1M
+      maxAttempts: 2
+
+  - id: dbt_build
+    type: io.kestra.plugin.dbt.cli.DbtCLI
+    containerImage: nyc-taxi-elt:local
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: NEVER
+    projectDir: /app/dbt
+    commands:
+      - dbt build
+    profiles: |
+      nyc_taxi_analytics:
+        target: prod
+        outputs:
+          prod:
+            type: snowflake
+            account: "{{ secret('SNOWFLAKE_ACCOUNT') }}"
+            user: "{{ secret('SNOWFLAKE_USER') }}"
+            password: "{{ secret('SNOWFLAKE_PASSWORD') }}"
+            role: "{{ secret('SNOWFLAKE_ROLE') }}"
+            warehouse: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+            database: "{{ secret('SNOWFLAKE_DATABASE') }}"
+            schema: PUBLIC
+            threads: 4
+            client_session_keep_alive: false
+    storeManifest:
+      key: manifest.json
+      namespace: "{{ flow.namespace }}"
+
+  - id: gold_sql_summary
+    type: io.kestra.plugin.jdbc.snowflake.Query
+    url: "jdbc:snowflake://{{ secret('SNOWFLAKE_ACCOUNT') }}.snowflakecomputing.com"
+    username: "{{ secret('SNOWFLAKE_USER') }}"
+    password: "{{ secret('SNOWFLAKE_PASSWORD') }}"
+    role: "{{ secret('SNOWFLAKE_ROLE') }}"
+    warehouse: "{{ secret('SNOWFLAKE_WAREHOUSE') }}"
+    database: "{{ secret('SNOWFLAKE_DATABASE') }}"
+    schema: GOLD
+    queryTag: kestra_nyc_taxi_gold_summary
+    fetchType: FETCH
+    sql: |
+      select
+          source_period,
+          trip_count,
+          total_passengers,
+          total_distance,
+          average_trip_minutes,
+          total_fare_amount,
+          total_tip_amount,
+          total_revenue
+      from {{ secret('SNOWFLAKE_DATABASE') }}.GOLD.RPT_MONTHLY_TRIP_SUMMARY
+      order by source_period
+
+triggers:
+  - id: monthly_schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 6 5 * *"
+    disabled: true

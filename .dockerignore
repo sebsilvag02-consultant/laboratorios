@@ -1,0 +1,10 @@
+.git
+.gitignore
+.env
+.venv
+__pycache__
+**/__pycache__
+dbt/target
+dbt/logs
+data
+*.parquet

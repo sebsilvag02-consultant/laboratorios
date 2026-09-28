@@ -1,0 +1,23 @@
+version: 2
+
+sources:
+  - name: raw_nyc_taxi
+    database: "{{ env_var('SNOWFLAKE_DATABASE', 'NYC_TAXI') }}"
+    schema: BRONZE
+    tables:
+      - name: raw_yellow_taxi
+        columns:
+          - name: raw_record
+            tests: [not_null]
+          - name: source_file
+            tests: [not_null]
+          - name: source_period
+            tests: [not_null]
+          - name: source_row_number
+            tests: [not_null]
+          - name: loaded_at
+            tests: [not_null]
+      - name: raw_taxi_zone_lookup
+        columns:
+          - name: location_id
+            tests: [not_null, unique]
